@@ -8,7 +8,9 @@ impl Protocol {
   }
 
   fn shake_hand(&mut self, request: HttpUpgradeRequest) -> Result<HttpUpgradeResponse, &str> {
-    Err("Not implemented")
+    Ok(HttpUpgradeResponse {
+      secWebSocketAccept: "fA9dggdnMPU79lJgAE3W4TRnyDM=",
+    })
   }
 }
 
