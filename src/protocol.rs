@@ -1,6 +1,10 @@
 use crate::http::{HttpUpgradeRequest, HttpUpgradeResponse};
+use base64;
+use sha1::{Digest, Sha1};
 
 struct Protocol {}
+
+static HANDSHAKE_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 impl Protocol {
   fn new() -> Protocol {
@@ -8,8 +12,15 @@ impl Protocol {
   }
 
   fn shake_hand(&mut self, request: HttpUpgradeRequest) -> Result<HttpUpgradeResponse, &str> {
+    let mut owned_key = request.sec_websocket_key.to_owned();
+    owned_key.push_str(HANDSHAKE_GUID);
+
+    let mut hasher = Sha1::new();
+    hasher.update(owned_key);
+    let sha1_hash = hasher.finalize();
+
     Ok(HttpUpgradeResponse {
-      secWebSocketAccept: "fA9dggdnMPU79lJgAE3W4TRnyDM=",
+      sec_websocket_accept: base64::encode(sha1_hash),
     })
   }
 }
@@ -23,8 +34,8 @@ mod test {
     let request = HttpUpgradeRequest {
       path: "ws://example.com:8181/",
       host: "localhost:8181",
-      secWebSocketVersion: 13,
-      secWebSocketKey: "q4xkcO32u266gldTuKaSOw==",
+      sec_websocket_version: 13,
+      sec_websocket_key: "q4xkcO32u266gldTuKaSOw==",
     };
 
     let mut protocol = Protocol::new();
@@ -33,7 +44,7 @@ mod test {
     assert_eq!(
       response,
       HttpUpgradeResponse {
-        secWebSocketAccept: "fA9dggdnMPU79lJgAE3W4TRnyDM="
+        sec_websocket_accept: "fA9dggdnMPU79lJgAE3W4TRnyDM=".to_owned()
       }
     )
   }

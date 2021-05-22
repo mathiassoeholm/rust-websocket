@@ -6,8 +6,8 @@ enum Method {
 pub struct HttpUpgradeRequest<'a> {
   pub path: &'a str,
   pub host: &'a str,
-  pub secWebSocketVersion: u8,
-  pub secWebSocketKey: &'a str,
+  pub sec_websocket_version: u8,
+  pub sec_websocket_key: &'a str,
 }
 
 impl HttpUpgradeRequest<'_> {
@@ -17,6 +17,6 @@ impl HttpUpgradeRequest<'_> {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct HttpUpgradeResponse<'a> {
-  pub secWebSocketAccept: &'a str,
+pub struct HttpUpgradeResponse {
+  pub sec_websocket_accept: String,
 }
