@@ -2,12 +2,12 @@ use crate::http::{HttpUpgradeRequest, HttpUpgradeResponse};
 use base64;
 use sha1::{Digest, Sha1};
 
-struct Protocol {}
+pub struct Protocol {}
 
 static HANDSHAKE_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 impl Protocol {
-  fn new() -> Protocol {
+  pub fn new() -> Protocol {
     Protocol {}
   }
 
@@ -47,5 +47,9 @@ mod test {
         sec_websocket_accept: "fA9dggdnMPU79lJgAE3W4TRnyDM=".to_owned()
       }
     )
+  }
+
+  fn it_should_pong_to_the_ping() {
+    // let message =
   }
 }
