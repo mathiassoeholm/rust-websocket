@@ -1,0 +1,9 @@
+[package]
+name = "rust_websocket"
+version = "0.1.0"
+authors = ["Mathias Soeholm <mathiassoeholm@gmail.com>", "Erik Hoej <erikhoj.p@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
