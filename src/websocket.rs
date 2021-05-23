@@ -1,4 +1,5 @@
 use crate::{http::HttpUpgradeRequest, protocol::Protocol};
+use core::num;
 use std::{io::prelude::*};
 use std::net::TcpStream;
 use std::str;
@@ -38,8 +39,11 @@ impl<'a> WebSocket<'a> {
     let mut saw_crlf = false;
     let mut message_end_index = None;
 
-    let bytes = read_from_stream(self.stream);
-  
+    let mut bytes = vec![0; 2048];
+    let num_bytes = self.stream.read(bytes.as_mut_slice()).unwrap();
+
+    println!("{:?}", num_bytes);
+
     for (index, &b) in bytes.iter().enumerate() {
       if last_was_r && b == b"\n"[0] {
         if saw_crlf {
@@ -71,13 +75,15 @@ impl<'a> WebSocket<'a> {
 
     // TODO - Make sure that we support HTTP Requests that are longer than 512 bytes?
     println!("{:?}", request);
+
+    loop {
+      let num_bytes = self.stream.read(bytes.as_mut_slice()).unwrap();
+      if num_bytes > 0 {
+        let mut result = Vec::with_capacity(num_bytes);
+        result.clone_from_slice(&bytes[..num_bytes]);
+        self.protocol.receive(result);
+      }
+    }
   }
 }
 
-fn read_from_stream(stream: &mut dyn WebSocketStream) -> Vec<u8> {
-  let mut buffer = vec![0; 512];
-  let result = stream.read(buffer.as_mut_slice()).unwrap();
-
-  // TODO: Does this clone the data in the array or simply clone the pointer?
-  buffer
-}

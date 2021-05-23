@@ -23,6 +23,26 @@ impl Protocol {
       sec_websocket_accept: base64::encode(sha1_hash),
     })
   }
+
+  pub fn receive(&self, bytes: Vec<u8>) {
+    let check = |byte:u8,pattern:u8| {
+      if pattern | byte == pattern { 1} else {0}
+    };
+
+    let mut bits = Vec::with_capacity(bytes.len() * 8);
+    for byte in bytes {
+      bits.push(check(byte, 0b10000000));
+      bits.push(check(byte, 0b01000000));
+      bits.push(check(byte, 0b00100000));
+      bits.push(check(byte, 0b00010000));
+      bits.push(check(byte, 0b00001000));
+      bits.push(check(byte, 0b00000100));
+      bits.push(check(byte, 0b00000010));
+      bits.push(check(byte, 0b00000001));
+    }
+
+    println!("Bits: {:?}", bits);
+  }
 }
 
 #[cfg(test)]
