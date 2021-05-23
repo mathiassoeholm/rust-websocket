@@ -1,4 +1,4 @@
-use crate::protocol::Protocol;
+use crate::{http::HttpUpgradeRequest, protocol::Protocol};
 use std::{collections::HashMap, io::prelude::*, ops::Index};
 use std::net::TcpStream;
 use std::str;
@@ -63,14 +63,14 @@ impl<'a> WebSocket<'a> {
     let message_bytes = &bytes[..message_end_index.unwrap() + 1 - "\r\n\r\n".len()];
     let message = str::from_utf8(message_bytes).unwrap();
 
-    let headers: HashMap<_, _> = message.split("\r\n").skip(1).map(|line| {
-      let mut split_iter= line.split(": "); 
-      println!("{}", line);
-      (split_iter.next().unwrap(), split_iter.next().unwrap())
-    }).collect();
+    let request  = HttpUpgradeRequest::parse(message).unwrap();
+    let response = self.protocol.shake_hand(&request).unwrap();
+
+    let http_response = format!("HTTP/1.1 101 Switching Protocols\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Accept: {}", response.sec_websocket_accept);
+    self.stream.write(http_response.as_bytes()).unwrap();
 
     // TODO - Make sure that we support HTTP Requests that are longer than 512 bytes?
-    println!("{:?}", headers);
+    println!("{:?}", request);
   }
 }
 

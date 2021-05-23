@@ -11,7 +11,7 @@ impl Protocol {
     Protocol {}
   }
 
-  fn shake_hand(&mut self, request: HttpUpgradeRequest) -> Result<HttpUpgradeResponse, &str> {
+  pub fn shake_hand(&mut self, request: &HttpUpgradeRequest) -> Result<HttpUpgradeResponse, &str> {
     let mut owned_key = request.sec_websocket_key.to_owned();
     owned_key.push_str(HANDSHAKE_GUID);
 
@@ -39,7 +39,7 @@ mod test {
     };
 
     let mut protocol = Protocol::new();
-    let response = protocol.shake_hand(request).unwrap();
+    let response = protocol.shake_hand(&request).unwrap();
 
     assert_eq!(
       response,
