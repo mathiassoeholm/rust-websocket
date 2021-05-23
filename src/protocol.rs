@@ -26,12 +26,40 @@ impl Protocol {
   }
 
   pub fn receive(&self, bytes: Vec<u8>) {
-    let check = |byte:u8,pattern:u8| {
-      if pattern | byte == pattern { 1} else {0}
+    let check = |byte:u8,pattern:u8| -> u8 {
+      if pattern & byte == pattern { 1} else {0}
     };
 
+    let byte_2 = bytes[1];
+    let is_masked = check(byte_2, 0b10000000) == 1;
+    let mask_key;
+    
+    if is_masked {
+      let payload_size = byte_2 - (check(byte_2, 0b10000000) * 128);
+      println!("Payload size: {:?}", payload_size);
+
+      let mask_key_start = match payload_size {
+        126 => 4,
+        127 => 10,
+        _ => 2
+      };
+      
+      mask_key = &bytes[mask_key_start..mask_key_start + 4];
+    } else {
+      mask_key = &[0;0];
+    }
+
+    println!("Bytes: {:?}", bytes);
+    println!("Mask Key: {:?}", mask_key);
+
     let mut bits = Vec::with_capacity(bytes.len() * 8);
-    for byte in bytes {
+    for (index, &byte) in bytes.iter().enumerate() {
+      //let byte = if is_masked {
+      //  original_byte ^ mask_key[index % 4]
+      //} else {
+      //  original_byte
+      //};
+
       bits.push(check(byte, 0b10000000));
       bits.push(check(byte, 0b01000000));
       bits.push(check(byte, 0b00100000));
