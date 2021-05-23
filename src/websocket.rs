@@ -1,5 +1,5 @@
 use crate::{http::HttpUpgradeRequest, protocol::Protocol};
-use std::{collections::HashMap, io::prelude::*, ops::Index};
+use std::{io::prelude::*};
 use std::net::TcpStream;
 use std::str;
 
@@ -13,7 +13,7 @@ pub trait WebSocketStream {
   fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error>;
 }
 
-struct TcpWebSocketStream<'a>(&'a mut TcpStream);
+pub struct TcpWebSocketStream<'a>(pub &'a mut TcpStream);
 
 impl WebSocketStream for TcpWebSocketStream<'_> {
   fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
