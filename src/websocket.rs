@@ -73,13 +73,16 @@ impl<'a> WebSocket<'a> {
     let http_response = format!("HTTP/1.1 101 Switching Protocols\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Accept: {}\r\n\r\n", response.sec_websocket_accept);
     self.stream.write(http_response.as_bytes()).unwrap();
 
+    self.stream.write(Protocol::create_ping_frame()).unwrap();
+
     // TODO - Make sure that we support HTTP Requests that are longer than 512 bytes?
     println!("{:?}", request);
 
     loop {
       let num_bytes = self.stream.read(bytes.as_mut_slice()).unwrap();
       if num_bytes > 0 {
-        let mut result = Vec::with_capacity(num_bytes);
+        let mut result = vec![0;num_bytes];
+        println!("{} {}", num_bytes, result.capacity());
         result.clone_from_slice(&bytes[..num_bytes]);
         self.protocol.receive(result);
       }

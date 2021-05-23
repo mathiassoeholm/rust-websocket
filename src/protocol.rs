@@ -5,6 +5,7 @@ use sha1::{Digest, Sha1};
 pub struct Protocol {}
 
 static HANDSHAKE_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+static PING_FRAME: [u8; 2] = [0b10001001, 0b00000000];
 
 impl Protocol {
   pub fn new() -> Protocol {
@@ -42,6 +43,10 @@ impl Protocol {
     }
 
     println!("Bits: {:?}", bits);
+  }
+
+  pub fn create_ping_frame() -> &'static [u8] {
+    return &PING_FRAME;
   }
 }
 
