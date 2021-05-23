@@ -1,6 +1,7 @@
 use crate::protocol::Protocol;
-use std::{io::prelude::*, ops::Index};
+use std::{collections::HashMap, io::prelude::*, ops::Index};
 use std::net::TcpStream;
+use std::str;
 
 pub struct WebSocket<'a> {
   stream: &'a mut dyn WebSocketStream,
@@ -37,31 +38,39 @@ impl<'a> WebSocket<'a> {
     let mut saw_crlf = false;
     let mut message_end_index = None;
 
-    while message_end_index == None {
-      let bytes = read_from_stream(self.stream);
-      
-      for (index, &b) in bytes.iter().enumerate() {
-        if last_was_r && b == b"\n"[0] {
-          if saw_crlf {
-            message_end_index = Some(index);
-            break;
-          }
+    let bytes = read_from_stream(self.stream);
   
-          saw_crlf = true;
-          last_was_r = false;
-          continue;
+    for (index, &b) in bytes.iter().enumerate() {
+      if last_was_r && b == b"\n"[0] {
+        if saw_crlf {
+          message_end_index = Some(index);
+          break;
         }
-  
-        last_was_r = b == b"\r"[0];
-  
-        if !last_was_r {
-          saw_crlf = false;
-        }
+
+        saw_crlf = true;
+        last_was_r = false;
+        continue;
+      }
+
+      last_was_r = b == b"\r"[0];
+
+      if !last_was_r {
+        saw_crlf = false;
       }
     }
+  
+
+    let message_bytes = &bytes[..message_end_index.unwrap() + 1 - "\r\n\r\n".len()];
+    let message = str::from_utf8(message_bytes).unwrap();
+
+    let headers: HashMap<_, _> = message.split("\r\n").skip(1).map(|line| {
+      let mut split_iter= line.split(": "); 
+      println!("{}", line);
+      (split_iter.next().unwrap(), split_iter.next().unwrap())
+    }).collect();
 
     // TODO - Make sure that we support HTTP Requests that are longer than 512 bytes?
-    println!("{:?}", message_end_index);
+    println!("{:?}", headers);
   }
 }
 
