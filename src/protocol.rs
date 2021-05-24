@@ -2,6 +2,30 @@ use crate::http::{HttpUpgradeRequest, HttpUpgradeResponse};
 use base64;
 use sha1::{Digest, Sha1};
 
+#[derive(PartialEq, Debug)]
+enum Opcode {
+  Ping,
+  Pong,
+  Unknown
+}
+
+impl Opcode {
+  fn from_u8(value: u8) -> Opcode {
+      match value {
+        0x09 => Opcode::Ping,
+        0x0A => Opcode::Pong,
+        _ => Opcode::Unknown,
+      }
+  }
+}
+
+#[derive(PartialEq, Debug)]
+struct DataFrame {
+  fin: bool,
+  opcode: Opcode,
+  payload_length: u64
+}
+
 pub struct Protocol {}
 
 static HANDSHAKE_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -26,6 +50,10 @@ impl Protocol {
   }
 
   pub fn receive(&self, bytes: Vec<u8>) {
+    let frame = self.parse_frame(bytes);
+  }
+
+  fn parse_frame(&self, bytes: Vec<u8>) -> DataFrame {
     let check = |byte:u8,pattern:u8| -> u8 {
       if pattern & byte == pattern { 1} else {0}
     };
@@ -70,7 +98,11 @@ impl Protocol {
       bits.push(check(byte, 0b00000001));
     }
 
-    println!("Bits: {:?}", bits);
+    DataFrame {
+      fin: bits[0] == 1,
+      opcode: Opcode::from_u8(bytes[0] & 0b00001111),
+      payload_length: 0
+    }
   }
 
   pub fn create_ping_frame() -> &'static [u8] {
@@ -102,7 +134,16 @@ mod test {
     )
   }
 
-  fn it_should_pong_to_the_ping() {
-    // let message =
+  #[test]
+  fn it_should_parse_frame() {
+    let pong_frame = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010, 0b10101010, 0b10101010, 0b10101010];
+
+    let protocol = Protocol::new();
+    let frame = protocol.parse_frame(pong_frame);
+    assert_eq!(frame, DataFrame {
+      fin: true,
+      opcode: Opcode::Pong,
+      payload_length: 0
+    });
   }
 }
