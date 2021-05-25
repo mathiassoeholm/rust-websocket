@@ -2,7 +2,7 @@ use crate::http::{HttpUpgradeRequest, HttpUpgradeResponse};
 use base64;
 use sha1::{Digest, Sha1};
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 enum Opcode {
   Ping,
   Pong,
@@ -20,20 +20,62 @@ impl Opcode {
 }
 
 #[derive(PartialEq, Debug)]
-struct DataFrame {
-  fin: bool,
-  opcode: Opcode,
-  payload_length: u64
+enum PayloadLengthType {
+  Normal,
+  Extended,
+  LongExtended,
 }
 
-pub struct Protocol {}
+impl PayloadLengthType {
+  fn from_number(value: u8) -> PayloadLengthType {
+    PayloadLengthType::Normal
+  }
+}
+
+#[derive(PartialEq, Debug)]
+pub struct DataFrame {
+  fin: bool,
+  opcode: Opcode,
+  payload_bytes: Option<Vec<u8>>,
+}
+
+struct UnfinishedDataFrame {
+  fin: bool,
+  opcode: Opcode,
+  payload_length_type: Option<PayloadLengthType>,
+  payload_length: Option<u64>,
+  is_masked: bool,
+  masking_key: Option<[u8; 4]>,
+  payload_bytes: Option<Vec<u8>>,
+}
+
+pub trait DataFrameReceiver {
+  fn receive(&mut self, frame: DataFrame);
+}
+
+pub struct Protocol<'a> {
+  unfinished_frame: Option<UnfinishedDataFrame>,
+  
+  // A buffer used when reading the bytes
+  byte_buffer: Option<Vec<u8>>,
+
+  frame_receiver: Option<&'a mut dyn DataFrameReceiver>,
+}
 
 static HANDSHAKE_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 static PING_FRAME: [u8; 2] = [0b10001001, 0b00000000];
 
-impl Protocol {
-  pub fn new() -> Protocol {
-    Protocol {}
+impl<'a> Protocol<'a> {
+  pub fn new() -> Protocol<'a> {
+    Protocol {
+      unfinished_frame: None,
+      byte_buffer: None,
+      frame_receiver: None,
+    }
+  }
+
+  pub fn set_frame_receiver(&mut self, receiver: &'a mut dyn DataFrameReceiver) {
+    self.frame_receiver = Some(receiver);
   }
 
   pub fn shake_hand(&mut self, request: &HttpUpgradeRequest) -> Result<HttpUpgradeResponse, &str> {
@@ -49,59 +91,65 @@ impl Protocol {
     })
   }
 
-  pub fn receive(&self, bytes: Vec<u8>) {
-    let frame = self.parse_frame(bytes);
+  pub fn receive(&mut self, bytes: Vec<u8>) {
+    self.parse_frame(bytes);
   }
 
-  fn parse_frame(&self, bytes: Vec<u8>) -> DataFrame {
-    let check = |byte:u8,pattern:u8| -> u8 {
-      if pattern & byte == pattern { 1} else {0}
-    };
+  fn parse_frame(&mut self, bytes: Vec<u8>) {
+    for byte in bytes {
+      self.parse_byte(byte);
+    }
+  }
 
-    let byte_2 = bytes[1];
-    let is_masked = check(byte_2, 0b10000000) == 1;
-    let mask_key;
-    
-    if is_masked {
-      let payload_size = byte_2 - (check(byte_2, 0b10000000) * 128);
-      println!("Payload size: {:?}", payload_size);
+  fn parse_byte(&mut self, byte: u8) {
+    if let Some(current_frame) = &mut self.unfinished_frame {
 
-      let mask_key_start = match payload_size {
-        126 => 4,
-        127 => 10,
-        _ => 2
-      };
-      
-      mask_key = &bytes[mask_key_start..mask_key_start + 4];
+      if current_frame.payload_length_type.is_none() {
+        // This is the second byte
+        let payload_length = byte & 0b01111111;
+
+        current_frame.payload_length_type = Some(PayloadLengthType::from_number(payload_length));
+        current_frame.payload_length = Some(u64::from(payload_length));
+        current_frame.is_masked = byte & 0b10000000 == 0b10000000;
+      } else {
+        if let Some(byte_buffer) = &mut self.byte_buffer {
+          // We are still reading the rest of the key.
+          byte_buffer.push(byte);
+
+          if byte_buffer.len() == 4 {
+            let mut masking_key: [u8; 4] = [0; 4];
+            masking_key.copy_from_slice(&byte_buffer[..4]);
+            current_frame.masking_key = Some(masking_key);
+
+            if let Some(frame_receiver) = &mut self.frame_receiver {
+              frame_receiver.receive(DataFrame {
+                fin: current_frame.fin,
+                opcode: current_frame.opcode.clone(),
+
+                // TODO - Figure out if this also clones the entire vector
+                payload_bytes: current_frame.payload_bytes.clone(),
+              });
+            }
+          }
+        } else {
+          // This is the first byte of the masking key
+          let mut key_buffer: Vec<u8> = Vec::with_capacity(4);
+          key_buffer.push(byte);
+
+          self.byte_buffer = Some(key_buffer);
+        }
+      }
     } else {
-      mask_key = &[0;0];
-    }
-
-    println!("Bytes: {:?}", bytes);
-    println!("Mask Key: {:?}", mask_key);
-
-    let mut bits = Vec::with_capacity(bytes.len() * 8);
-    for (index, &byte) in bytes.iter().enumerate() {
-      //let byte = if is_masked {
-      //  original_byte ^ mask_key[index % 4]
-      //} else {
-      //  original_byte
-      //};
-
-      bits.push(check(byte, 0b10000000));
-      bits.push(check(byte, 0b01000000));
-      bits.push(check(byte, 0b00100000));
-      bits.push(check(byte, 0b00010000));
-      bits.push(check(byte, 0b00001000));
-      bits.push(check(byte, 0b00000100));
-      bits.push(check(byte, 0b00000010));
-      bits.push(check(byte, 0b00000001));
-    }
-
-    DataFrame {
-      fin: bits[0] == 1,
-      opcode: Opcode::from_u8(bytes[0] & 0b00001111),
-      payload_length: 0
+      // This is the first byte of the frame
+      self.unfinished_frame = Some(UnfinishedDataFrame {
+        fin: byte & 0b10000000 == 0b10000000,
+        opcode: Opcode::from_u8(byte & 0b00001111),
+        payload_length_type: None,
+        payload_length: None,
+        is_masked: false,
+        masking_key: None,
+        payload_bytes: None,
+      });
     }
   }
 
@@ -112,7 +160,19 @@ impl Protocol {
 
 #[cfg(test)]
 mod test {
-  use super::*;
+
+use super::*;
+  struct TestFrameReceiver {
+    received_frame: Option<DataFrame>,
+    received_frames: usize,
+  }
+
+  impl<'a> DataFrameReceiver for TestFrameReceiver {
+    fn receive(&mut self, frame: DataFrame) {
+        self.received_frame = Some(frame);
+        self.received_frames += 1;
+    }
+  }
 
   #[test]
   fn it_responds_to_upgrade_request() {
@@ -138,12 +198,75 @@ mod test {
   fn it_should_parse_frame() {
     let pong_frame = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010, 0b10101010, 0b10101010, 0b10101010];
 
-    let protocol = Protocol::new();
-    let frame = protocol.parse_frame(pong_frame);
-    assert_eq!(frame, DataFrame {
+    let mut frame_receiver = TestFrameReceiver {
+      received_frame: None,
+      received_frames: 0,
+    };
+
+    let mut protocol = Protocol::new();
+    protocol.set_frame_receiver(&mut frame_receiver);
+
+    protocol.parse_frame(pong_frame);
+
+    assert_eq!(frame_receiver.received_frame, Some(DataFrame {
       fin: true,
       opcode: Opcode::Pong,
-      payload_length: 0
-    });
+      payload_bytes: None,
+    }));
+  }
+
+  #[test]
+  fn it_should_parse_partial_frames() {
+    let pong_bytes_1 = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010];
+    let pong_bytes_2 = vec![/* Remaining mask-keys: */ 0b10101010, 0b10101010, 0b10101010];
+
+    let mut frame_receiver = TestFrameReceiver {
+      received_frame: None,
+      received_frames: 0,
+    };
+
+    let mut protocol = Protocol::new();
+    protocol.set_frame_receiver(&mut frame_receiver);
+
+    protocol.parse_frame(pong_bytes_1);
+    protocol.parse_frame(pong_bytes_2);
+
+    assert_eq!(frame_receiver.received_frame, Some(DataFrame {
+      fin: true,
+      opcode: Opcode::Pong,
+      payload_bytes: None,
+    }));
+    assert_eq!(frame_receiver.received_frames, 1);
+  }
+
+  #[test]
+  fn it_supports_multiple_frames() {
+    let pong_frame_1 = vec![0b10001010, 0b00000000];
+    let pong_frame_2 = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010, 0b10101010, 0b10101010, 0b10101010];
+
+    let mut frame_receiver = TestFrameReceiver {
+      received_frame: None,
+      received_frames: 0,
+    };
+
+    let mut protocol = Protocol::new();
+    protocol.set_frame_receiver(&mut frame_receiver);
+
+    protocol.parse_frame(pong_frame_1);
+
+    assert_eq!(frame_receiver.received_frame, Some(DataFrame {
+      fin: true,
+      opcode: Opcode::Pong,
+      payload_bytes: None,
+    }));
+
+    protocol.parse_frame(pong_frame_2);
+    
+    assert_eq!(frame_receiver.received_frame, Some(DataFrame {
+      fin: true,
+      opcode: Opcode::Pong,
+      payload_bytes: None,
+    }));
+    assert_eq!(frame_receiver.received_frames, 2);
   }
 }

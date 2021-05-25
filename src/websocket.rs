@@ -1,12 +1,12 @@
+use crate::protocol::{DataFrame};
 use crate::{http::HttpUpgradeRequest, protocol::Protocol};
-use core::num;
 use std::{io::prelude::*};
 use std::net::TcpStream;
 use std::str;
 
 pub struct WebSocket<'a> {
   stream: &'a mut dyn WebSocketStream,
-  protocol: Protocol,
+  protocol: Protocol<'a>,
 }
 
 pub trait WebSocketStream {
@@ -89,4 +89,3 @@ impl<'a> WebSocket<'a> {
     }
   }
 }
-
