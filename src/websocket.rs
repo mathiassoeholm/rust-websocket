@@ -1,4 +1,3 @@
-use crate::protocol::{DataFrame, DataFrameReceiver};
 use crate::{http::HttpUpgradeRequest, protocol::Protocol};
 use std::{io::prelude::*};
 use std::net::TcpStream;
@@ -6,7 +5,7 @@ use std::str;
 
 pub struct WebSocket<'a> {
   stream: &'a mut dyn WebSocketStream,
-  protocol: Protocol
+  protocol: Protocol<'a>
 }
 
 pub trait WebSocketStream {
@@ -26,21 +25,11 @@ impl WebSocketStream for TcpWebSocketStream<'_> {
   }
 }
 
-struct DoNothingFrameReceiver {
-
-}
-
-impl DataFrameReceiver for DoNothingFrameReceiver {
-    fn receive(&mut self, frame: DataFrame) {
-        
-    }
-}
-
 impl<'a> WebSocket<'a> {
   pub fn new(stream: &'a mut dyn WebSocketStream) -> WebSocket<'a> {
     WebSocket {
       stream: stream,
-      protocol: Protocol::new(Box::new(DoNothingFrameReceiver {})),
+      protocol: Protocol::new(),
     }
   }
 

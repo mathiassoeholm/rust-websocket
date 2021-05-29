@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use crate::http::{HttpUpgradeRequest, HttpUpgradeResponse};
 use base64;
 use sha1::{Digest, Sha1};
@@ -55,25 +53,29 @@ pub trait DataFrameReceiver {
   fn receive(&mut self, frame: DataFrame);
 }
 
-pub struct Protocol {
+pub struct Protocol<'a> {
   unfinished_frame: Option<UnfinishedDataFrame>,
   
   // A buffer used when reading the bytes
   byte_buffer: Option<Vec<u8>>,
 
-  frame_receiver: RefCell<Box<dyn DataFrameReceiver>>,
+  frame_receiver: Option<&'a mut dyn DataFrameReceiver>,
 }
 
 static HANDSHAKE_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 static PING_FRAME: [u8; 2] = [0b10001001, 0b00000000];
 
-impl Protocol {
-  pub fn new(frame_receiver: Box<dyn DataFrameReceiver>) -> Protocol {
+impl<'a> Protocol<'a> {
+  pub fn new() -> Protocol<'a> {
     Protocol {
       unfinished_frame: None,
       byte_buffer: None,
-      frame_receiver: RefCell::new(frame_receiver),
+      frame_receiver: None
     }
+  }
+
+  fn set_frame_receiver(&mut self, frame_receiver: &'a mut dyn DataFrameReceiver) {
+    self.frame_receiver = Some(frame_receiver);
   }
 
   pub fn shake_hand(&mut self, request: &HttpUpgradeRequest) -> Result<HttpUpgradeResponse, &str> {
@@ -119,14 +121,15 @@ impl Protocol {
             current_frame.masking_key.as_mut().unwrap().copy_from_slice(&byte_buffer[..4]);
 
 
-            let mut frame_receiver = self.frame_receiver.borrow_mut();
-            frame_receiver.receive(DataFrame {
-              fin: current_frame.fin,
-              opcode: current_frame.opcode,
+            if let Some(frame_receiver) = &mut self.frame_receiver {
+              frame_receiver.receive(DataFrame {
+                fin: current_frame.fin,
+                opcode: current_frame.opcode,
 
-              // TODO - Figure out if this also clones the entire vector
-              payload_bytes: current_frame.payload_bytes.clone(),
-            });
+                // TODO - Figure out if this also clones the entire vector
+                payload_bytes: current_frame.payload_bytes.clone(),
+              });
+            };
           }
         } else {
           // This is the first byte of the masking key
@@ -158,18 +161,22 @@ impl Protocol {
 #[cfg(test)]
 mod test {
 
-use std::cell::Ref;
-
 use super::*;
   struct TestFrameReceiver {
-    received_frame: Option<DataFrame>,
-    received_frames: usize,
+    received_frames: Vec<DataFrame>,
+  }
+  
+  impl TestFrameReceiver {
+    fn new() -> TestFrameReceiver {
+      TestFrameReceiver {
+        received_frames: Vec::new() 
+      }
+    }
   }
 
   impl<'a> DataFrameReceiver for TestFrameReceiver {
     fn receive(&mut self, frame: DataFrame) {
-        self.received_frame = Some(frame);
-        self.received_frames += 1;
+        self.received_frames.push(frame)
     }
   }
 
@@ -198,25 +205,17 @@ use super::*;
   fn it_should_parse_frame() {
     let pong_frame = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010, 0b10101010, 0b10101010, 0b10101010];
 
-    let frame_receiver = Box::new(TestFrameReceiver {
-      received_frame: None,
-      received_frames: 0,
-    });
-
-    let mut protocol = Protocol::new(frame_receiver);
-    frame_receiver.receive(DataFrame {
-      fin: true,
-      opcode: Opcode::Pong,
-      payload_bytes: None,
-    });
+    let mut frame_receiver = TestFrameReceiver::new();
+    let mut protocol = Protocol::new();
+    protocol.set_frame_receiver(&mut frame_receiver);
 
     protocol.parse_bytes(pong_frame);
 
-    assert_eq!(frame_receiver.received_frame, Some(DataFrame {
+    assert_eq!(frame_receiver.received_frames, vec![DataFrame {
       fin: true,
       opcode: Opcode::Pong,
       payload_bytes: None,
-    }));
+    }]);
   }
 
   #[test]
@@ -224,22 +223,18 @@ use super::*;
     let pong_bytes_1 = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010];
     let pong_bytes_2 = vec![/* Remaining mask-keys: */ 0b10101010, 0b10101010, 0b10101010];
 
-    let frame_receiver = Box::new(TestFrameReceiver {
-      received_frame: None,
-      received_frames: 0,
-    });
-
-    let mut protocol = Protocol::new(frame_receiver);
+    let mut frame_receiver = TestFrameReceiver::new();
+    let mut protocol = Protocol::new();
+    protocol.set_frame_receiver(&mut frame_receiver);
 
     protocol.parse_bytes(pong_bytes_1);
     protocol.parse_bytes(pong_bytes_2);
 
-    assert_eq!(frame_receiver.received_frame, Some(DataFrame {
+    assert_eq!(frame_receiver.received_frames, vec![DataFrame {
       fin: true,
       opcode: Opcode::Pong,
       payload_bytes: None,
-    }));
-    assert_eq!(frame_receiver.received_frames, 1);
+    }]);
   }
 
   #[test]
@@ -247,28 +242,22 @@ use super::*;
     let pong_frame_1 = vec![0b10001010, 0b00000000];
     let pong_frame_2 = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010, 0b10101010, 0b10101010, 0b10101010];
 
-    let mut protocol = Protocol::new(Box::new(TestFrameReceiver {
-      received_frame: None,
-      received_frames: 0,
-    }));
-
-    let frame_receiver = protocol.frame_receiver.borrow();
+    let mut protocol = Protocol::new();
+    let mut frame_receiver = TestFrameReceiver::new();
+    protocol.set_frame_receiver(&mut frame_receiver);
 
     protocol.parse_bytes(pong_frame_1);
-
-    assert_eq!(frame_receiver.received_frame, Some(DataFrame {
-      fin: true,
-      opcode: Opcode::Pong,
-      payload_bytes: None,
-    }));
-
     protocol.parse_bytes(pong_frame_2);
-    
-    assert_eq!(frame_receiver.received_frame, Some(DataFrame {
+
+    assert_eq!(frame_receiver.received_frames, vec![
+      DataFrame {
       fin: true,
       opcode: Opcode::Pong,
       payload_bytes: None,
-    }));
-    assert_eq!(frame_receiver.received_frames, 2);
+    }, DataFrame {
+      fin: true,
+      opcode: Opcode::Pong,
+      payload_bytes: None,
+    }]);
   }
 }
