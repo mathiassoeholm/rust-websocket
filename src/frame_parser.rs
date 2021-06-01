@@ -128,15 +128,19 @@ impl<'a> FrameParser<'a> {
     }
 
     fn parse_payload_length(&mut self, byte: u8) {
-        let mut current_frame = self.unfinished_frame.as_mut().unwrap();
+        let mut unfinished_frame = self.unfinished_frame.as_mut().unwrap();
 
-        current_frame.is_masked = byte & 0b10000000 == 0b10000000;
+        unfinished_frame.is_masked = byte & 0b10000000 == 0b10000000;
 
         let payload_length = byte & 0b01111111;
-        current_frame.payload_length_type = Some(PayloadLengthType::from_number(payload_length));
-        current_frame.payload_length = Some(payload_length as u64);
+        unfinished_frame.payload_length_type = Some(PayloadLengthType::from_number(payload_length));
+        unfinished_frame.payload_length = Some(payload_length as u64);
 
-        self.state = ParserState::MaskingKey;
+        if unfinished_frame.is_masked {
+            self.state = ParserState::MaskingKey;
+        } else {
+            self.finish_frame();
+        };
     }
 
     fn parse_masking_key(&mut self, byte: u8) {
@@ -153,28 +157,35 @@ impl<'a> FrameParser<'a> {
                 byte_buffer.push(byte);
 
                 if byte_buffer.len() == 4 {
-                    let mut current_frame = self.unfinished_frame.as_mut().unwrap();
-                    current_frame.masking_key = Some([0; 4]);
-                    current_frame
+                    let mut unfinished_frame = self.unfinished_frame.as_mut().unwrap();
+                    unfinished_frame.masking_key = Some([0; 4]);
+                    unfinished_frame
                         .masking_key
                         .as_mut()
                         .unwrap()
                         .copy_from_slice(&byte_buffer[..4]);
 
-                    if let Some(frame_receiver) = &mut self.frame_receiver {
-                        frame_receiver.receive(DataFrame {
-                            fin: current_frame.fin,
-                            opcode: current_frame.opcode,
-
-                            // TODO - Figure out if this also clones the entire vector
-                            payload_bytes: current_frame.payload_bytes.clone(),
-                        });
-                    };
-
-                    self.state = ParserState::FirstByte;
+                    self.finish_frame();
                 }
             }
         }
+    }
+
+    pub fn finish_frame(&mut self) {
+        if let Some(frame_receiver) = &mut self.frame_receiver {
+            if let Some(finished_frame) = &self.unfinished_frame {
+                frame_receiver.receive(DataFrame {
+                    fin: finished_frame.fin,
+                    opcode: finished_frame.opcode,
+
+                    // TODO - Figure out if this also clones the entire vector
+                    payload_bytes: finished_frame.payload_bytes.clone(),
+                });
+            }
+        };
+
+        self.unfinished_frame = None;
+        self.state = ParserState::FirstByte;
     }
 
     pub fn create_ping_frame() -> &'static [u8] {
@@ -253,25 +264,22 @@ mod test {
 
     #[test]
     fn it_supports_multiple_frames() {
-        let pong_frame_1 = vec![0b10001010, 0b00000000];
-        let pong_frame_2 = vec![
-            0b10001010, 0b10000000, /* Masking key: */ 0b10101010, 0b10101010, 0b10101010,
-            0b10101010,
-        ];
+        let ping_frame = vec![0b10001001, 0b00000000];
+        let pong_frame = vec![0b10001010, 0b00000000];
 
         let mut frame_parser = FrameParser::new();
         let mut frame_receiver = TestFrameReceiver::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(pong_frame_1);
-        frame_parser.parse_bytes(pong_frame_2);
+        frame_parser.parse_bytes(ping_frame);
+        frame_parser.parse_bytes(pong_frame);
 
         assert_eq!(
             frame_receiver.received_frames,
             vec![
                 DataFrame {
                     fin: true,
-                    opcode: Opcode::Pong,
+                    opcode: Opcode::Ping,
                     payload_bytes: None,
                 },
                 DataFrame {
@@ -282,4 +290,27 @@ mod test {
             ]
         );
     }
+
+    #[test]
+    fn it_parses_short_byte_payload() {
+        let payload = vec![0b00000001, 0b00000010];
+        let frame_with_short_payload = [vec![0b10000001, 0b00000010], payload.clone()].concat();
+
+        let mut frame_parser = FrameParser::new();
+        let mut frame_receiver = TestFrameReceiver::new();
+        frame_parser.set_frame_receiver(&mut frame_receiver);
+
+        frame_parser.parse_bytes(frame_with_short_payload);
+        assert_eq!(
+            frame_receiver.received_frames,
+            vec![DataFrame {
+                fin: true,
+                opcode: Opcode::Unknown,
+                payload_bytes: Some(payload),
+            }],
+        );
+    }
+
+    // Add
+    // fn it_uses_masking_key
 }
