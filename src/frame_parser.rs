@@ -187,7 +187,20 @@ impl<'a> FrameParser<'a> {
         }
 
         let payload = &remaining_bytes[..(payload_length as usize)];
-        unfinished_frame.payload_bytes = Some(payload.to_vec());
+
+        if unfinished_frame.is_masked {
+            let masking_key = unfinished_frame.masking_key.unwrap();
+            unfinished_frame.payload_bytes = Some(
+                payload
+                    .iter()
+                    .enumerate()
+                    .map(|(index, byte)| byte ^ masking_key[index % 4])
+                    .collect(),
+            );
+        } else {
+            unfinished_frame.payload_bytes = Some(payload.to_vec());
+        }
+
         self.finish_frame();
     }
 
