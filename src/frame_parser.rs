@@ -98,18 +98,18 @@ impl<'a> FrameParser<'a> {
     }
 
     fn parse_bytes(&mut self, bytes: Vec<u8>) {
-        for byte in bytes {
-            self.parse_byte(byte);
+        for (index, byte) in bytes.iter().enumerate() {
+            self.parse_byte(*byte, &bytes[index..]);
         }
     }
 
-    fn parse_byte(&mut self, byte: u8) {
+    fn parse_byte(&mut self, byte: u8, remaining_bytes: &[u8]) {
         match self.state {
             ParserState::FirstByte => self.parse_first_byte(byte),
             ParserState::PayloadLength => self.parse_payload_length(byte),
             ParserState::ExtendedPayloadLength => todo!(),
             ParserState::MaskingKey => self.parse_masking_key(byte),
-            ParserState::Payload => todo!(),
+            ParserState::Payload => self.parse_payload(remaining_bytes),
         };
     }
 
@@ -138,6 +138,8 @@ impl<'a> FrameParser<'a> {
 
         if unfinished_frame.is_masked {
             self.state = ParserState::MaskingKey;
+        } else if unfinished_frame.payload_length > Some(0) {
+            self.state = ParserState::Payload;
         } else {
             self.finish_frame();
         };
@@ -165,10 +167,28 @@ impl<'a> FrameParser<'a> {
                         .unwrap()
                         .copy_from_slice(&byte_buffer[..4]);
 
-                    self.finish_frame();
+                    if unfinished_frame.payload_length > Some(0) {
+                        self.state = ParserState::Payload;
+                    } else {
+                        self.finish_frame();
+                    };
                 }
             }
         }
+    }
+
+    fn parse_payload(&mut self, remaining_bytes: &[u8]) {
+        let unfinished_frame = self.unfinished_frame.as_mut().unwrap();
+        let payload_length = unfinished_frame.payload_length.unwrap();
+
+        if payload_length == 0 {
+            self.finish_frame();
+            return;
+        }
+
+        let payload = &remaining_bytes[..(payload_length as usize)];
+        unfinished_frame.payload_bytes = Some(payload.to_vec());
+        self.finish_frame();
     }
 
     pub fn finish_frame(&mut self) {
