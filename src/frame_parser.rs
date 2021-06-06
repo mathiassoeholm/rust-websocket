@@ -331,6 +331,37 @@ mod test {
         );
     }
 
-    // Add
-    // fn it_uses_masking_key
+    #[test]
+    fn it_parses_masked_payload() {
+        let mask = vec![0b10110101, 0b00000000, 0b11111111, 0b10110000];
+        let payload = vec![0b00000001, 0b00000010, 0b00010111, 0b10110011, 0b00000001];
+        let masked_payload = vec![
+            payload[0] ^ mask[0],
+            payload[1] ^ mask[1],
+            payload[2] ^ mask[2],
+            payload[3] ^ mask[3],
+            payload[4] ^ mask[0],
+        ];
+        let frame_with_masked_payload = [
+            vec![0b10000001, 0b10000101],
+            mask.clone(),
+            masked_payload.clone(),
+        ]
+        .concat();
+
+        let mut frame_parser = FrameParser::new();
+        let mut frame_receiver = TestFrameReceiver::new();
+        frame_parser.set_frame_receiver(&mut frame_receiver);
+
+        frame_parser.parse_bytes(frame_with_masked_payload);
+
+        assert_eq!(
+            frame_receiver.received_frames,
+            vec![DataFrame {
+                fin: true,
+                opcode: Opcode::Unknown,
+                payload_bytes: Some(payload),
+            }],
+        );
+    }
 }
