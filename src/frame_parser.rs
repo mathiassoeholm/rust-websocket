@@ -41,7 +41,7 @@ struct UnfinishedDataFrame {
     payload_length_type: Option<PayloadLengthType>,
     payload_length: Option<u64>,
     is_masked: bool,
-    masking_key: Option<[u8; 4]>,
+    masking_key: Vec<u8>,
     payload_bytes: Option<Vec<u8>>,
 }
 
@@ -108,7 +108,7 @@ impl<'a> FrameParser<'a> {
             ParserState::FirstByte => self.parse_first_byte(byte),
             ParserState::PayloadLength => self.parse_payload_length(byte),
             ParserState::ExtendedPayloadLength => todo!(),
-            ParserState::MaskingKey => self.parse_masking_key(byte),
+            ParserState::MaskingKey => self.parse_masking_key(remaining_bytes),
             ParserState::Payload => self.parse_payload(remaining_bytes),
         };
     }
@@ -120,7 +120,7 @@ impl<'a> FrameParser<'a> {
             payload_length_type: None,
             payload_length: None,
             is_masked: false,
-            masking_key: None,
+            masking_key: Vec::with_capacity(4),
             payload_bytes: None,
         });
 
@@ -145,35 +145,21 @@ impl<'a> FrameParser<'a> {
         };
     }
 
-    fn parse_masking_key(&mut self, byte: u8) {
-        match &mut self.byte_buffer {
-            None => {
-                // This is the first byte of the masking key
-                let mut key_buffer: Vec<u8> = Vec::with_capacity(4);
-                key_buffer.push(byte);
+    fn parse_masking_key(&mut self, remaining_bytes: &[u8]) {
+        let unfinished_frame = self.unfinished_frame.as_mut().unwrap();
 
-                self.byte_buffer = Some(key_buffer);
-            }
+        let bytes_to_take = 4 - unfinished_frame.masking_key.len();
+        remaining_bytes
+            .iter()
+            .take(bytes_to_take)
+            .for_each(|byte| unfinished_frame.masking_key.push(*byte));
 
-            Some(byte_buffer) => {
-                byte_buffer.push(byte);
-
-                if byte_buffer.len() == 4 {
-                    let mut unfinished_frame = self.unfinished_frame.as_mut().unwrap();
-                    unfinished_frame.masking_key = Some([0; 4]);
-                    unfinished_frame
-                        .masking_key
-                        .as_mut()
-                        .unwrap()
-                        .copy_from_slice(&byte_buffer[..4]);
-
-                    if unfinished_frame.payload_length > Some(0) {
-                        self.state = ParserState::Payload;
-                    } else {
-                        self.finish_frame();
-                    };
-                }
-            }
+        if unfinished_frame.masking_key.len() == 4 {
+            if unfinished_frame.payload_length > Some(0) {
+                self.state = ParserState::Payload;
+            } else {
+                self.finish_frame();
+            };
         }
     }
 
@@ -189,12 +175,11 @@ impl<'a> FrameParser<'a> {
         let payload = &remaining_bytes[..(payload_length as usize)];
 
         if unfinished_frame.is_masked {
-            let masking_key = unfinished_frame.masking_key.unwrap();
             unfinished_frame.payload_bytes = Some(
                 payload
                     .iter()
                     .enumerate()
-                    .map(|(index, byte)| byte ^ masking_key[index % 4])
+                    .map(|(index, byte)| byte ^ unfinished_frame.masking_key[index % 4])
                     .collect(),
             );
         } else {
@@ -377,4 +362,6 @@ mod test {
             }],
         );
     }
+
+    // fn it_supports_payload_split_in_multiple_frames
 }
