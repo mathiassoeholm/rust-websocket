@@ -248,9 +248,7 @@ fn consume_one<T: Copy>(vec: &mut Vec<T>) -> T {
 }
 
 fn consume<T: Copy>(vec: &mut Vec<T>, amount: usize) -> Vec<T> {
-    let consumed_elems: Vec<T> = vec.iter().take(amount).map(|x| *x).collect();
-    vec.truncate(amount);
-    consumed_elems
+    vec.drain(0..amount).collect()
 }
 
 #[cfg(test)]
