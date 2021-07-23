@@ -106,13 +106,15 @@ impl<'a> FrameParser<'a> {
         // Allow the state to consume as many bytes as it needs
         let mut bytes_copy = &mut bytes.clone();
 
-        match self.state {
-            ParserState::FirstByte => self.parse_first_byte(&mut bytes_copy),
-            ParserState::PayloadLength => self.parse_payload_length(&mut bytes_copy),
-            ParserState::ExtendedPayloadLength => todo!(),
-            ParserState::MaskingKey => self.parse_masking_key(&mut bytes_copy),
-            ParserState::Payload => self.parse_payload(&mut bytes_copy),
-        };
+        while bytes_copy.len() > 0 {
+            match self.state {
+                ParserState::FirstByte => self.parse_first_byte(&mut bytes_copy),
+                ParserState::PayloadLength => self.parse_payload_length(&mut bytes_copy),
+                ParserState::ExtendedPayloadLength => todo!(),
+                ParserState::MaskingKey => self.parse_masking_key(&mut bytes_copy),
+                ParserState::Payload => self.parse_payload(&mut bytes_copy),
+            };
+        }
         // self.parse_byte(bytes.iter());
     }
 
@@ -151,12 +153,12 @@ impl<'a> FrameParser<'a> {
         unfinished_frame.payload_length_type = Some(PayloadLengthType::from_number(payload_length));
         unfinished_frame.payload_length = Some(payload_length as u64);
 
-        if unfinished_frame.is_masked {
-            self.state = ParserState::MaskingKey;
-        } else if unfinished_frame.payload_length > Some(0) {
-            self.state = ParserState::Payload;
-        } else {
+        if unfinished_frame.payload_length == Some(0) {
             self.finish_frame();
+        } else if unfinished_frame.is_masked {
+            self.state = ParserState::MaskingKey;
+        } else {
+            self.state = ParserState::Payload;
         };
     }
 
@@ -172,8 +174,8 @@ impl<'a> FrameParser<'a> {
         // We can't take any more bytes than are available in the incoming bytes vector
         let bytes_to_take = min(remaining_masking_key_bytes, bytes.len());
 
-        let masking_key_bytes = consume(bytes, bytes_to_take);
-        masking_key.extend(masking_key_bytes);
+        let mut masking_key_bytes = consume(bytes, bytes_to_take);
+        masking_key.append(&mut masking_key_bytes);
 
         if masking_key.len() == 4 {
             self.state = ParserState::Payload;
