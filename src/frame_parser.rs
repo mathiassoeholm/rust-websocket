@@ -1,4 +1,5 @@
 use std::cmp::min;
+use std::iter::Take;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 enum Opcode {
@@ -43,7 +44,7 @@ struct UnfinishedDataFrame {
     payload_length_type: Option<PayloadLengthType>,
     payload_length: Option<u64>,
     is_masked: bool,
-    masking_key: Vec<u8>,
+    masking_key: Option<Vec<u8>>,
     payload_bytes: Option<Vec<u8>>,
 }
 
@@ -80,6 +81,7 @@ pub struct FrameParser<'a> {
 }
 
 static PING_FRAME: [u8; 2] = [0b10001001, 0b00000000];
+static MASKING_KEY_LENGTH: usize = 4; // bytes
 
 impl<'a> FrameParser<'a> {
     pub fn new() -> FrameParser<'a> {
@@ -95,20 +97,21 @@ impl<'a> FrameParser<'a> {
         self.frame_receiver = Some(frame_receiver);
     }
 
-    pub fn receive(&mut self, bytes: Vec<u8>) {
-        self.parse_bytes(bytes);
+    pub fn receive(&mut self, bytes: &Vec<u8>) {
+        self.parse_bytes(&bytes);
     }
 
-    fn parse_bytes(&mut self, bytes: Vec<u8>) {
+    fn parse_bytes(&mut self, bytes: &Vec<u8>) {
         // Check the state
         // Allow the state to consume as many bytes as it needs
+        let mut bytes_copy = &mut bytes.clone();
 
         match self.state {
-            ParserState::FirstByte => self.parse_first_byte(&mut bytes),
-            ParserState::PayloadLength => self.parse_payload_length(&mut bytes),
+            ParserState::FirstByte => self.parse_first_byte(&mut bytes_copy),
+            ParserState::PayloadLength => self.parse_payload_length(&mut bytes_copy),
             ParserState::ExtendedPayloadLength => todo!(),
-            ParserState::MaskingKey => self.parse_masking_key(remaining_bytes),
-            ParserState::Payload => self.parse_payload(&mut bytes),
+            ParserState::MaskingKey => self.parse_masking_key(&mut bytes_copy),
+            ParserState::Payload => self.parse_payload(&mut bytes_copy),
         };
         // self.parse_byte(bytes.iter());
     }
@@ -124,14 +127,14 @@ impl<'a> FrameParser<'a> {
     // }
 
     fn parse_first_byte(&mut self, bytes: &mut Vec<u8>) {
-        let first_byte = consume_one(&mut bytes);
+        let first_byte = consume_one(bytes);
         self.unfinished_frame = Some(UnfinishedDataFrame {
             fin: first_byte & 0b10000000 == 0b10000000,
             opcode: Opcode::from_u8(first_byte & 0b00001111),
             payload_length_type: None,
             payload_length: None,
             is_masked: false,
-            masking_key: Vec::with_capacity(4),
+            masking_key: None,
             payload_bytes: None,
         });
 
@@ -139,7 +142,7 @@ impl<'a> FrameParser<'a> {
     }
 
     fn parse_payload_length(&mut self, bytes: &mut Vec<u8>) {
-        let byte = consume_one(&mut bytes);
+        let byte = consume_one(bytes);
         let mut unfinished_frame = self.unfinished_frame.as_mut().unwrap();
 
         unfinished_frame.is_masked = byte & 0b10000000 == 0b10000000;
@@ -157,21 +160,23 @@ impl<'a> FrameParser<'a> {
         };
     }
 
-    fn parse_masking_key(&mut self, remaining_bytes: &[u8]) {
+    fn parse_masking_key(&mut self, bytes: &mut Vec<u8>) {
         let unfinished_frame = self.unfinished_frame.as_mut().unwrap();
+        if unfinished_frame.masking_key == None {
+            unfinished_frame.masking_key = Some(Vec::with_capacity(MASKING_KEY_LENGTH))
+        };
+        let masking_key = unfinished_frame.masking_key.as_mut().unwrap();
 
-        let bytes_to_take = 4 - unfinished_frame.masking_key.len();
-        remaining_bytes
-            .iter()
-            .take(bytes_to_take)
-            .for_each(|byte| unfinished_frame.masking_key.push(*byte));
+        let remaining_masking_key_bytes = MASKING_KEY_LENGTH - masking_key.len();
 
-        if unfinished_frame.masking_key.len() == 4 {
-            if unfinished_frame.payload_length > Some(0) {
-                self.state = ParserState::Payload;
-            } else {
-                self.finish_frame();
-            };
+        // We can't take any more bytes than are available in the incoming bytes vector
+        let bytes_to_take = min(remaining_masking_key_bytes, bytes.len());
+
+        let masking_key_bytes = consume(bytes, bytes_to_take);
+        masking_key.extend(masking_key_bytes);
+
+        if masking_key.len() == 4 {
+            self.state = ParserState::Payload;
         }
     }
 
@@ -196,13 +201,14 @@ impl<'a> FrameParser<'a> {
         // We can't take any more bytes than are available in the incoming bytes vector
         let bytes_to_take = min(bytes_left_of_payload, bytes.len());
 
-        let payload_bytes = consume(&mut bytes, bytes_to_take);
+        let payload_bytes = consume(bytes, bytes_to_take);
 
         if unfinished_frame.is_masked {
+            let masking_key = unfinished_frame.masking_key.as_ref().unwrap();
             unfinished_frame_payload.extend(payload_bytes.iter().enumerate().map(
                 |(index, byte)| {
                     let index_in_entire_payload = unfinished_frame_payload_len + index;
-                    byte ^ unfinished_frame.masking_key[index_in_entire_payload % 4]
+                    byte ^ masking_key[index_in_entire_payload % 4]
                 },
             ));
         } else {
@@ -237,14 +243,14 @@ impl<'a> FrameParser<'a> {
     }
 }
 
-fn consume_one<T>(vec: &mut Vec<T>) -> T {
+fn consume_one<T: Copy>(vec: &mut Vec<T>) -> T {
     consume(vec, 1)[0]
 }
 
-fn consume<T>(vec: &mut Vec<T>, amount: usize) -> &[T] {
-    let slice = &vec[..(vec.len() - amount)];
+fn consume<T: Copy>(vec: &mut Vec<T>, amount: usize) -> Vec<T> {
+    let consumed_elems: Vec<T> = vec.iter().take(amount).map(|x| *x).collect();
     vec.truncate(amount);
-    slice
+    consumed_elems
 }
 
 #[cfg(test)]
@@ -280,7 +286,7 @@ mod test {
         let mut frame_parser = FrameParser::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(pong_frame);
+        frame_parser.parse_bytes(&pong_frame);
 
         assert_eq!(
             frame_receiver.received_frames,
@@ -303,8 +309,8 @@ mod test {
         let mut frame_parser = FrameParser::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(pong_bytes_1);
-        frame_parser.parse_bytes(pong_bytes_2);
+        frame_parser.parse_bytes(&pong_bytes_1);
+        frame_parser.parse_bytes(&pong_bytes_2);
 
         assert_eq!(
             frame_receiver.received_frames,
@@ -325,8 +331,8 @@ mod test {
         let mut frame_receiver = TestFrameReceiver::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(ping_frame);
-        frame_parser.parse_bytes(pong_frame);
+        frame_parser.parse_bytes(&ping_frame);
+        frame_parser.parse_bytes(&pong_frame);
 
         assert_eq!(
             frame_receiver.received_frames,
@@ -354,7 +360,7 @@ mod test {
         let mut frame_receiver = TestFrameReceiver::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(frame_with_short_payload);
+        frame_parser.parse_bytes(&frame_with_short_payload);
         assert_eq!(
             frame_receiver.received_frames,
             vec![DataFrame {
@@ -387,7 +393,7 @@ mod test {
         let mut frame_receiver = TestFrameReceiver::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(frame_with_masked_payload);
+        frame_parser.parse_bytes(&frame_with_masked_payload);
 
         assert_eq!(
             frame_receiver.received_frames,
