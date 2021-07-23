@@ -102,8 +102,8 @@ impl<'a> FrameParser<'a> {
     }
 
     fn parse_bytes(&mut self, bytes: &Vec<u8>) {
-        // Check the state
-        // Allow the state to consume as many bytes as it needs
+        // TODO: Avoid copying bytes input, perhaps it's okay to mutate it?
+        // Make a copy of the bytes, so we avoid having to mutate the input
         let mut bytes_copy = &mut bytes.clone();
 
         while bytes_copy.len() > 0 {
@@ -115,18 +115,7 @@ impl<'a> FrameParser<'a> {
                 ParserState::Payload => self.parse_payload(&mut bytes_copy),
             };
         }
-        // self.parse_byte(bytes.iter());
     }
-
-    // fn parse_byte(&mut self, bytes: dyn std::iter::Itertor<u8>) {
-    //     match self.state {
-    //         ParserState::FirstByte => self.parse_first_byte(byte),
-    //         ParserState::PayloadLength => self.parse_payload_length(byte),
-    //         ParserState::ExtendedPayloadLength => todo!(),
-    //         ParserState::MaskingKey => self.parse_masking_key(remaining_bytes),
-    //         ParserState::Payload => self.parse_payload(remaining_bytes),
-    //     };
-    // }
 
     fn parse_first_byte(&mut self, bytes: &mut Vec<u8>) {
         let first_byte = consume_one(bytes);
