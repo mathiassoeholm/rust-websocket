@@ -82,7 +82,7 @@ impl<'a> WebSocket<'a> {
                 let mut result = vec![0; num_bytes];
                 println!("{} {}", num_bytes, result.capacity());
                 result.clone_from_slice(&bytes[..num_bytes]);
-                self.frame_parser.receive(&result);
+                self.frame_parser.receive(&mut result);
             }
         }
     }

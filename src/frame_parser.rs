@@ -97,22 +97,21 @@ impl<'a> FrameParser<'a> {
         self.frame_receiver = Some(frame_receiver);
     }
 
-    pub fn receive(&mut self, bytes: &Vec<u8>) {
-        self.parse_bytes(&bytes);
+    /// Note that `bytes` is mutable because the bytes are consumed.
+    /// If we want to avoid consuming the input bytes, we would have to clone
+    /// the entire vector of bytes.
+    pub fn receive(&mut self, mut bytes: &mut Vec<u8>) {
+        self.parse_bytes(&mut bytes);
     }
 
-    fn parse_bytes(&mut self, bytes: &Vec<u8>) {
-        // TODO: Avoid copying bytes input, perhaps it's okay to mutate it?
-        // Make a copy of the bytes, so we avoid having to mutate the input
-        let mut bytes_copy = &mut bytes.clone();
-
-        while bytes_copy.len() > 0 {
+    fn parse_bytes(&mut self, mut bytes: &mut Vec<u8>) {
+        while bytes.len() > 0 {
             match self.state {
-                ParserState::FirstByte => self.parse_first_byte(&mut bytes_copy),
-                ParserState::PayloadLength => self.parse_payload_length(&mut bytes_copy),
+                ParserState::FirstByte => self.parse_first_byte(&mut bytes),
+                ParserState::PayloadLength => self.parse_payload_length(&mut bytes),
                 ParserState::ExtendedPayloadLength => todo!(),
-                ParserState::MaskingKey => self.parse_masking_key(&mut bytes_copy),
-                ParserState::Payload => self.parse_payload(&mut bytes_copy),
+                ParserState::MaskingKey => self.parse_masking_key(&mut bytes),
+                ParserState::Payload => self.parse_payload(&mut bytes),
             };
         }
     }
@@ -218,8 +217,8 @@ impl<'a> FrameParser<'a> {
                 frame_receiver.receive(DataFrame {
                     fin: finished_frame.fin,
                     opcode: finished_frame.opcode,
-
-                    // TODO - Figure out if this also clones the entire vector
+                    // We're making a clone of the entire payload here
+                    // not sure if that is a good idea...
                     payload_bytes: finished_frame.payload_bytes.clone(),
                 });
             }
@@ -266,7 +265,7 @@ mod test {
 
     #[test]
     fn it_should_parse_frame() {
-        let pong_frame = vec![
+        let mut pong_frame = vec![
             0b10001010, 0b10000000, /* Masking key: */ 0b10101010, 0b10101010, 0b10101010,
             0b10101010,
         ];
@@ -275,7 +274,7 @@ mod test {
         let mut frame_parser = FrameParser::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(&pong_frame);
+        frame_parser.parse_bytes(&mut pong_frame);
 
         assert_eq!(
             frame_receiver.received_frames,
@@ -289,8 +288,8 @@ mod test {
 
     #[test]
     fn it_should_parse_partial_frames() {
-        let pong_bytes_1 = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010];
-        let pong_bytes_2 = vec![
+        let mut pong_bytes_1 = vec![0b10001010, 0b10000000, /* Masking key: */ 0b10101010];
+        let mut pong_bytes_2 = vec![
             /* Remaining mask-keys: */ 0b10101010, 0b10101010, 0b10101010,
         ];
 
@@ -298,8 +297,8 @@ mod test {
         let mut frame_parser = FrameParser::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(&pong_bytes_1);
-        frame_parser.parse_bytes(&pong_bytes_2);
+        frame_parser.parse_bytes(&mut pong_bytes_1);
+        frame_parser.parse_bytes(&mut pong_bytes_2);
 
         assert_eq!(
             frame_receiver.received_frames,
@@ -313,15 +312,15 @@ mod test {
 
     #[test]
     fn it_supports_multiple_frames() {
-        let ping_frame = vec![0b10001001, 0b00000000];
-        let pong_frame = vec![0b10001010, 0b00000000];
+        let mut ping_frame = vec![0b10001001, 0b00000000];
+        let mut pong_frame = vec![0b10001010, 0b00000000];
 
         let mut frame_parser = FrameParser::new();
         let mut frame_receiver = TestFrameReceiver::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(&ping_frame);
-        frame_parser.parse_bytes(&pong_frame);
+        frame_parser.parse_bytes(&mut ping_frame);
+        frame_parser.parse_bytes(&mut pong_frame);
 
         assert_eq!(
             frame_receiver.received_frames,
@@ -343,13 +342,13 @@ mod test {
     #[test]
     fn it_parses_short_byte_payload() {
         let payload = vec![0b00000001, 0b00000010];
-        let frame_with_short_payload = [vec![0b10000001, 0b00000010], payload.clone()].concat();
+        let mut frame_with_short_payload = [vec![0b10000001, 0b00000010], payload.clone()].concat();
 
         let mut frame_parser = FrameParser::new();
         let mut frame_receiver = TestFrameReceiver::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(&frame_with_short_payload);
+        frame_parser.parse_bytes(&mut frame_with_short_payload);
         assert_eq!(
             frame_receiver.received_frames,
             vec![DataFrame {
@@ -371,7 +370,7 @@ mod test {
             payload[3] ^ mask[3],
             payload[4] ^ mask[0],
         ];
-        let frame_with_masked_payload = [
+        let mut frame_with_masked_payload = [
             vec![0b10000001, 0b10000101],
             mask.clone(),
             masked_payload.clone(),
@@ -382,7 +381,7 @@ mod test {
         let mut frame_receiver = TestFrameReceiver::new();
         frame_parser.set_frame_receiver(&mut frame_receiver);
 
-        frame_parser.parse_bytes(&frame_with_masked_payload);
+        frame_parser.parse_bytes(&mut frame_with_masked_payload);
 
         assert_eq!(
             frame_receiver.received_frames,
